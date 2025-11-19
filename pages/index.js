@@ -1,154 +1,120 @@
-// pages/index.js
 import { useEffect, useRef, useState } from "react";
+import * as mpFace from "@mediapipe/face_detection";
+import { Camera } from "@mediapipe/camera_utils";
 
 export default function Home() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const [status, setStatus] = useState("Esperando cámara...");
-  const [isAlarmOn, setIsAlarmOn] = useState(false);
-  const alarmAudioRef = useRef(null);
+  const faceCanvasRef = useRef(null);
 
+  const [emotion, setEmotion] = useState("Detectando...");
+  const [lastSent, setLastSent] = useState(0);
+
+  // 1. Inicializar MediaPipe Face Detection
   useEffect(() => {
-    // Pedir acceso a la cámara
-    async function initCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-        });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-        setStatus("Cámara iniciada. Analizando...");
-      } catch (err) {
-        console.error(err);
-        setStatus("Error al acceder a la cámara");
-      }
-    }
+    const faceDetection = new mpFace.FaceDetection({
+      locateFile: (file) =>
+        `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`,
+    });
 
-    initCamera();
+    faceDetection.setOptions({
+      model: "short", // más rápido
+      minDetectionConfidence: 0.6,
+    });
+
+    faceDetection.onResults(onFaceResults);
+
+    if (videoRef.current) {
+      const camera = new Camera(videoRef.current, {
+        onFrame: async () => {
+          await faceDetection.send({ image: videoRef.current });
+        },
+        width: 640,
+        height: 480,
+      });
+
+      camera.start();
+    }
   }, []);
 
-  useEffect(() => {
-    // Cada X segundos tomar captura y enviar a la API
-    const interval = setInterval(() => {
-      captureAndAnalyze();
-    }, 8000); // cada 8 segundos, ajusta a gusto
-
-    return () => clearInterval(interval);
-  });
-
-  const captureAndAnalyze = async () => {
-    const video = videoRef.current;
+  // 2. Procesar detección de rostros y recortar el rostro
+  const onFaceResults = async (results) => {
     const canvas = canvasRef.current;
-
-    if (!video || !canvas) return;
-    if (video.readyState !== 4) return; // no está listo el video aún
-
-    const width = video.videoWidth;
-    const height = video.videoHeight;
-
-    canvas.width = width;
-    canvas.height = height;
-
     const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, width, height);
 
-    const dataUrl = canvas.toDataURL("image/jpeg");
-    setStatus("Analizando...");
+    canvas.width = 640;
+    canvas.height = 480;
+
+    ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+    if (!results.detections || results.detections.length === 0) {
+      setEmotion("No se detecta rostro");
+      return;
+    }
+
+    const detection = results.detections[0];
+    const box = detection.boundingBox;
+
+    // Recortar rostro en un canvas separado
+    const faceCanvas = faceCanvasRef.current;
+    const fctx = faceCanvas.getContext("2d");
+
+    faceCanvas.width = box.width;
+    faceCanvas.height = box.height;
+
+    fctx.drawImage(
+      results.image,
+      box.xCenter - box.width / 2,
+      box.yCenter - box.height / 2,
+      box.width,
+      box.height,
+      0,
+      0,
+      box.width,
+      box.height
+    );
+
+    // Enviar cada 300ms
+    if (Date.now() - lastSent > 300) {
+      sendFaceToAPI();
+      setLastSent(Date.now());
+    }
+  };
+
+  // 3. Convertir a Base64 y mandar al backend /api/analyze
+  const sendFaceToAPI = async () => {
+    const faceCanvas = faceCanvasRef.current;
+
+    const base64 = faceCanvas.toDataURL("image/jpeg");
 
     try {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: dataUrl }),
+        body: JSON.stringify({ imageBase64: base64 }),
       });
 
       const data = await res.json();
-
-      if (data.state === "sleepy") {
-        setStatus("Estado: SOMNOLIENTO 😴");
-        triggerAlarm();
-      } else if (data.state === "awake") {
-        setStatus("Estado: DESPIERTO 😁");
-        stopAlarm();
-      } else {
-        setStatus("Estado: desconocido 🤔");
-      }
-    } catch (error) {
-      console.error(error);
-      setStatus("Error al analizar la imagen");
-    }
-  };
-
-  const triggerAlarm = () => {
-    setIsAlarmOn(true);
-    if (alarmAudioRef.current) {
-      alarmAudioRef.current.loop = true;
-      alarmAudioRef.current.play().catch((e) => console.log(e));
-    }
-  };
-
-  const stopAlarm = () => {
-    setIsAlarmOn(false);
-    if (alarmAudioRef.current) {
-      alarmAudioRef.current.pause();
-      alarmAudioRef.current.currentTime = 0;
+      setEmotion(data.emotion || "desconocido");
+    } catch (e) {
+      console.error(e);
     }
   };
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#111",
-        color: "#fff",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "20px",
-        textAlign: "center",
-      }}
-    >
-      <h1>Análisis de somnolencia con IA</h1>
-      <p>Si la IA detecta que te estás durmiendo, sonará una alarma 🔔</p>
+    <div style={{ padding: 20 }}>
+      <h1>Detección emocional en tiempo real</h1>
+      <p><strong>Emoción:</strong> {emotion}</p>
 
       <video
         ref={videoRef}
         autoPlay
         playsInline
-        style={{
-          width: "320px",
-          height: "240px",
-          background: "#000",
-          borderRadius: "8px",
-          marginTop: "20px",
-        }}
+        style={{ width: 640, height: 480, borderRadius: 8 }}
       />
 
       <canvas ref={canvasRef} style={{ display: "none" }} />
-
-      <p style={{ marginTop: "20px", fontSize: "18px" }}>{status}</p>
-
-      <button
-        onClick={captureAndAnalyze}
-        style={{
-          marginTop: "10px",
-          padding: "10px 20px",
-          borderRadius: "8px",
-          border: "none",
-          cursor: "pointer",
-        }}
-      >
-        Analizar ahora
-      </button>
-
-      <audio
-        ref={alarmAudioRef}
-        src="https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg"
-      />
-
-      {isAlarmOn && <p style={{ color: "red", marginTop: "10px" }}>⚠️ ¡ALARMA ACTIVADA!</p>}
+      <canvas ref={faceCanvasRef} style={{ display: "none" }} />
     </div>
   );
 }
