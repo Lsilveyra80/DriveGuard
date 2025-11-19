@@ -4,6 +4,20 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// EXTRAER JSON de un texto mezclado
+function extractJSON(text) {
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      return JSON.parse(jsonMatch[0]);
+    } catch (e) {
+      console.error("Error parsing JSON:", e);
+      return null;
+    }
+  }
+  return null;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Only POST allowed" });
@@ -21,15 +35,9 @@ export default async function handler(req, res) {
             {
               type: "input_text",
               text:
-                "Analiza esta cara y responde SOLO un JSON: " +
+                "Analiza esta cara y responde SOLO un JSON EXACTO con este formato: " +
                 "{ \"emotion\": \"contento | enojado | somnoliento | triste | tranquilo\" }. " +
-                "Definiciones precisas: " +
-                "contento: sonrisa, mejillas levantadas, ojos relajados. " +
-                "enojado: cejas fruncidas, mandíbula tensa. " +
-                "somnoliento: ojos semicerrados, cabeza baja. " +
-                "triste: comisuras hacia abajo, ojos caídos. " +
-                "tranquilo: expresión neutral. " +
-                "No agregues texto fuera del JSON.",
+                "NO escribas nada fuera del JSON.",
             },
             {
               type: "input_image",
@@ -40,19 +48,22 @@ export default async function handler(req, res) {
       ],
     });
 
+    // Extraer texto de la respuesta
     let text = "";
     ai.output[0].content.forEach((blk) => {
       if (blk.type === "output_text") text += blk.text;
     });
 
-    let emotion = "desconocido";
-    try {
-      emotion = JSON.parse(text).emotion;
-    } catch {}
+    console.log("RAW MODEL OUTPUT:", text);
 
-    res.status(200).json({ emotion });
+    // EXTRAEMOS JSON aunque venga mezclado
+    const parsed = extractJSON(text);
+
+    const emotion = parsed?.emotion ?? "desconocido";
+
+    return res.status(200).json({ emotion, raw: text });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "API error" });
+    return res.status(500).json({ error: "API error" });
   }
 }
