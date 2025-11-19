@@ -25,8 +25,15 @@ export default async function handler(req, res) {
             {
               type: "input_text",
               text:
-                "Look at this face and reply ONLY one word: 'awake' or 'sleepy'. " +
-                "No sentences, no emojis, no punctuation, only that word.",
+                "Analiza la expresión facial de la persona en la imagen y responde únicamente en un JSON con este formato: " +
+                "{ \"emotion\": \"contento | enojado | somnoliento | triste | tranquilo\" }. " +
+                "Define las emociones así: " +
+                "- contento: sonrisa leve o marcada, ojos abiertos normales " +
+                "- enojado: cejas fruncidas, tensión en mandíbula, boca apretada " +
+                "- somnoliento: ojos semicerrados, cabeza inclinada, expresión apagada " +
+                "- triste: comisuras hacia abajo, ojos caídos, expresión apagada pero no cansada " +
+                "- tranquilo: cara neutra sin señales claras de las anteriores. " +
+                "No escribas explicaciones. No agregues texto extra. SOLO el JSON.",
             },
             {
               type: "input_image",
@@ -37,9 +44,8 @@ export default async function handler(req, res) {
       ],
     });
 
-    // EXTRAER TEXTO DE RESPUESTA
+    // EXTRAER TEXTO
     let text = "";
-
     if (ai.output && ai.output[0] && ai.output[0].content) {
       for (const block of ai.output[0].content) {
         if (block.type === "output_text") {
@@ -48,17 +54,21 @@ export default async function handler(req, res) {
       }
     }
 
-    const raw = text.trim().toLowerCase();
-    console.log("RAW MODEL OUTPUT:", raw);
+    console.log("RAW MODEL OUTPUT:", text);
 
-    let state = "unknown";
+    // Intentar parsear JSON
+    let emotion = "desconocido";
+    try {
+      const parsed = JSON.parse(text);
+      emotion = parsed.emotion || "desconocido";
+    } catch (e) {
+      console.error("JSON parse error:", e);
+    }
 
-    if (raw.startsWith("awake")) state = "awake";
-    if (raw.startsWith("sleepy")) state = "sleepy";
-
-    return res.status(200).json({ state, raw });
+    return res.status(200).json({ emotion, raw: text });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "API error" });
   }
 }
+
