@@ -1,30 +1,43 @@
 import { useEffect, useRef, useState } from "react";
-import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 
 export default function Home() {
   const videoRef = useRef(null);
   const faceCanvasRef = useRef(null);
   const [emotion, setEmotion] = useState("Detectando...");
-  const [faceLandmarker, setFaceLandmarker] = useState(null);
+  const faceLandmarkerRef = useRef(null);
   const lastSentRef = useRef(0);
 
-  // Inicializar Face Landmarker
   useEffect(() => {
     async function init() {
-      const vision = await FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm"
+      // Esperar a que cargue MediaPipe desde el script
+      const wait = () =>
+        new Promise((resolve) => {
+          const check = () => {
+            if (window.FilesetResolver && window.FaceLandmarker) resolve();
+            else setTimeout(check, 50);
+          };
+          check();
+        });
+
+      await wait();
+
+      const vision = await window.FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
       );
 
-      const landmarker = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath:
-            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/face_landmarker.task",
-        },
-        runningMode: "VIDEO",
-        numFaces: 1,
-      });
+      const faceLandmarker = await window.FaceLandmarker.createFromOptions(
+        vision,
+        {
+          baseOptions: {
+            modelAssetPath:
+              "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/face_landmarker.task",
+          },
+          runningMode: "VIDEO",
+          numFaces: 1,
+        }
+      );
 
-      setFaceLandmarker(landmarker);
+      faceLandmarkerRef.current = faceLandmarker;
 
       // iniciar webcam
       navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
@@ -38,26 +51,26 @@ export default function Home() {
     init();
   }, []);
 
-  // Loop de detección
   const detectFrame = async () => {
-    if (!faceLandmarker || !videoRef.current) {
+    const faceLandmarker = faceLandmarkerRef.current;
+    if (!faceLandmarker) {
       requestAnimationFrame(detectFrame);
       return;
     }
 
-    const results = faceLandmarker.detectForVideo(
-      videoRef.current,
-      performance.now()
-    );
+    const video = videoRef.current;
 
-    if (!results || !results.faceLandmarks || results.faceLandmarks.length === 0) {
+    const results = faceLandmarker.detectForVideo(video, performance.now());
+
+    if (!results.faceLandmarks?.length) {
       setEmotion("No se detecta rostro");
       requestAnimationFrame(detectFrame);
       return;
     }
 
-    // Obtener bounding box
     const landmarks = results.faceLandmarks[0];
+
+    // bounding box automático
     const xs = landmarks.map((p) => p.x);
     const ys = landmarks.map((p) => p.y);
 
@@ -65,10 +78,6 @@ export default function Home() {
     const maxX = Math.max(...xs);
     const minY = Math.min(...ys);
     const maxY = Math.max(...ys);
-
-    const video = videoRef.current;
-    const faceCanvas = faceCanvasRef.current;
-    const ctx = faceCanvas.getContext("2d");
 
     const w = video.videoWidth;
     const h = video.videoHeight;
@@ -78,12 +87,15 @@ export default function Home() {
     const width = (maxX - minX) * w;
     const height = (maxY - minY) * h;
 
+    const faceCanvas = faceCanvasRef.current;
+    const ctx = faceCanvas.getContext("2d");
+
     faceCanvas.width = width;
     faceCanvas.height = height;
 
     ctx.drawImage(video, x, y, width, height, 0, 0, width, height);
 
-    // enviar cada 300ms
+    // Enviar cada 300ms
     if (Date.now() - lastSentRef.current > 300) {
       lastSentRef.current = Date.now();
       sendFaceToAPI();
